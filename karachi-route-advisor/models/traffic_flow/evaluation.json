@@ -1,0 +1,70 @@
+{
+  "prediction_horizon": "1 hour",
+  "selected_model": "random_forest",
+  "selected_test_residuals": {
+    "absolute_error_p90": 306.9585649756759,
+    "residual_p05": -314.8540283396519,
+    "residual_p50": -6.941211025288567,
+    "residual_p95": 298.53821835098734
+  },
+  "selection_metric": "validation_mae",
+  "selection_rule": "Lowest validation MAE; test split not used for selection.",
+  "target_units": "vehicles per hour",
+  "test": {
+    "calendar_mean": {
+      "mae": 253.2519742133373,
+      "r2": 0.9525375620247709,
+      "rmse": 430.8961557448229
+    },
+    "hist_gradient_boosting": {
+      "mae": 138.4966880487731,
+      "r2": 0.988236275379,
+      "rmse": 214.5211038241943
+    },
+    "persistence_lag_1": {
+      "mae": 593.2631800042008,
+      "r2": 0.827941483152318,
+      "rmse": 820.4189548637238
+    },
+    "random_forest": {
+      "mae": 136.9203480030724,
+      "r2": 0.9880125743574513,
+      "rmse": 216.55118339112818
+    },
+    "seasonal_naive_lag_24": {
+      "mae": 539.3799621928166,
+      "r2": 0.7363577262784371,
+      "rmse": 1015.5589138904944
+    }
+  },
+  "test_actual_mean": 3379.2482671707626,
+  "test_actual_std": 1978.0770882151917,
+  "test_rows": 4761,
+  "validation": {
+    "calendar_mean": {
+      "mae": 320.4127631342989,
+      "r2": 0.9243587058639926,
+      "rmse": 543.8464537039519
+    },
+    "hist_gradient_boosting": {
+      "mae": 163.1900576595508,
+      "r2": 0.9839578745540436,
+      "rmse": 250.45388901123056
+    },
+    "persistence_lag_1": {
+      "mae": 591.3759714345725,
+      "r2": 0.8277209223697435,
+      "rmse": 820.754163800285
+    },
+    "random_forest": {
+      "mae": 162.62507049050157,
+      "r2": 0.9836417026214835,
+      "rmse": 252.909926391398
+    },
+    "seasonal_naive_lag_24": {
+      "mae": 592.6916614156689,
+      "r2": 0.7254111589533458,
+      "rmse": 1036.1873063280698
+    }
+  }
+}

@@ -1,0 +1,65 @@
+{
+  "accident_target": {
+    "classes": [
+      "low",
+      "moderate",
+      "high"
+    ],
+    "definition": "Hourly STATS19 collision count weighted fatal=10, serious=3, slight=1 across Great Britain.",
+    "name": "severity_weighted_collisions_per_hour",
+    "severity_weights": {
+      "1": 10.0,
+      "2": 3.0,
+      "3": 1.0
+    },
+    "units": "severity-weighted collisions per hour"
+  },
+  "features": [
+    {
+      "description": "Sine encoding of local hour of day.",
+      "name": "hour_sin"
+    },
+    {
+      "description": "Cosine encoding of local hour of day.",
+      "name": "hour_cos"
+    },
+    {
+      "description": "Sine encoding of day of week.",
+      "name": "dow_sin"
+    },
+    {
+      "description": "Cosine encoding of day of week.",
+      "name": "dow_cos"
+    },
+    {
+      "description": "Sine encoding of month.",
+      "name": "month_sin"
+    },
+    {
+      "description": "Cosine encoding of month.",
+      "name": "month_cos"
+    },
+    {
+      "description": "1 when the target date is Saturday or Sunday.",
+      "name": "is_weekend"
+    }
+  ],
+  "leakage_controls": [
+    "Calendar-only features; no traffic lags, no target-hour weather, no Mapbox evidence, and no target-derived inputs.",
+    "Chronological 70/15/15 split with a 24-hour embargo between splits.",
+    "Class thresholds, baselines, and preprocessing are fitted on the training split only.",
+    "The held-out test split is not used for model selection.",
+    "Mapbox ETA differences are never used as labels or features.",
+    "No sensor-to-Karachi-road or UK-to-Karachi-corridor mapping is used."
+  ],
+  "traffic_target": {
+    "classes": [
+      "low",
+      "moderate",
+      "high"
+    ],
+    "definition": "Hourly westbound I-94 volume at ATR station 301, classified using train-split terciles.",
+    "name": "traffic_volume",
+    "units": "vehicles per hour"
+  }
+}

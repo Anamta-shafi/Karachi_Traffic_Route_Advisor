@@ -1,0 +1,219 @@
+{
+  "accident": {
+    "dataset": {
+      "attribution": "Department for Transport (UK), Road safety data: collision tables.",
+      "files": [
+        {
+          "bytes": 19790001,
+          "name": "collision-2023.csv",
+          "sha256": "0c01d4194b4e4c5e1b242a43c633bc30e22cf16e8becca698e63a37f71410cfa"
+        },
+        {
+          "bytes": 19208488,
+          "name": "collision-2024.csv",
+          "sha256": "32a78f4662e309160f37b1ea2b82017e85e07b62a022d680da7140e88706a17c"
+        },
+        {
+          "bytes": 19349153,
+          "name": "collision-2025.csv",
+          "sha256": "e699c19bdb82e47e449b6f3381ac87631865f6a31cef118c9955ba80ca870e2b"
+        }
+      ],
+      "geographic_coverage": "Great Britain (England, Scotland, Wales)",
+      "hourly_cells": 26304,
+      "license": "Open Government Licence v3.0",
+      "name": "STATS19 Road Safety Data (collision tables)",
+      "raw_rows": 306710,
+      "severity_counts": {
+        "1": 4477,
+        "2": 72196,
+        "3": 230037
+      },
+      "severity_weights": {
+        "1": 10.0,
+        "2": 3.0,
+        "3": 1.0
+      },
+      "source_url": "https://www.gov.uk/government/statistics/road-safety-data",
+      "time_span": [
+        "2023-01-01T00:00:00",
+        "2025-12-31T23:00:00"
+      ]
+    },
+    "limitations": [
+      "Great Britain collision data; not Karachi crash records.",
+      "Calendar-only prior; not corridor-matched to Karachi routes.",
+      "Not a probability that a crash will occur on a selected route.",
+      "Severity weights are a documented policy choice."
+    ],
+    "metrics_file": "evaluation.json",
+    "model": {
+      "classifier": "hist_gradient_boosting",
+      "feature_set": "calendar_only",
+      "features": [
+        "hour_sin",
+        "hour_cos",
+        "dow_sin",
+        "dow_cos",
+        "month_sin",
+        "month_cos",
+        "is_weekend"
+      ],
+      "regressor": "hist_gradient_boosting_poisson"
+    },
+    "target": {
+      "classes": [
+        "low",
+        "moderate",
+        "high"
+      ],
+      "name": "severity_weighted_collisions_per_hour",
+      "threshold_basis": "train split terciles",
+      "thresholds": [
+        10.0,
+        23.0
+      ],
+      "units": "severity-weighted collisions per hour"
+    }
+  },
+  "accident_disclosure": "Accident-risk model trained on external UK STATS19 collision data \u2014 not locally validated for Gulistan-e-Jauhar and not corridor-matched to Karachi.",
+  "applicability": "experimental_external",
+  "artifact_version": 1,
+  "disclosure": "ML model trained on external traffic data \u2014 not locally validated for Gulistan-e-Jauhar.",
+  "environment": {
+    "joblib": "1.6.0",
+    "numpy": "2.5.4",
+    "pandas": "3.1.0",
+    "platform": "Windows-11-10.0.26200-SP0",
+    "python": "3.12.10",
+    "scikit_learn": "1.9.1"
+  },
+  "evaluation_file": "evaluation.json",
+  "evaluation_report": "reports/departure_forecast_evaluation.md",
+  "feature_definitions_file": "feature_definitions.json",
+  "features": [
+    "hour_sin",
+    "hour_cos",
+    "dow_sin",
+    "dow_cos",
+    "month_sin",
+    "month_cos",
+    "is_weekend"
+  ],
+  "karachi_validated": false,
+  "leakage_controls": [
+    "Calendar-only features; no lags, no Mapbox, no target-hour weather.",
+    "Chronological split with a 24-hour embargo.",
+    "Thresholds and models fit on training data only.",
+    "Test split untouched during model selection.",
+    "No sensor-to-road or UK-to-Karachi corridor mapping."
+  ],
+  "limitations": [
+    "Experimental external-data model; not validated for Gulistan-e-Jauhar.",
+    "Traffic model is one Minnesota sensor; not Karachi traffic.",
+    "Accident model is a Great Britain calendar prior; not Karachi crash data.",
+    "No route-specific training labels are available.",
+    "Mapbox is not a training source and remains request-time evidence."
+  ],
+  "model_kind": "calendar_only_external_experimental",
+  "model_version": "external-calendar-v1",
+  "route_applicable": false,
+  "split": {
+    "accident": {
+      "test": {
+        "end": "2025-12-31T23:00:00",
+        "rows": "3,946",
+        "start": "2025-07-20T14:00:00"
+      },
+      "train": {
+        "end": "2025-02-05T03:00:00",
+        "rows": "18,388",
+        "start": "2023-01-01T00:00:00"
+      },
+      "validation": {
+        "end": "2025-07-19T13:00:00",
+        "rows": "3,922",
+        "start": "2025-02-06T04:00:00"
+      }
+    },
+    "embargo_hours": 24,
+    "strategy": "chronological",
+    "traffic": {
+      "test": {
+        "end": "2018-09-30T23:00:00",
+        "rows": "6,087",
+        "start": "2018-01-19T15:00:00"
+      },
+      "train": {
+        "end": "2017-05-09T04:00:00",
+        "rows": "28,378",
+        "start": "2012-10-02T09:00:00"
+      },
+      "validation": {
+        "end": "2018-01-18T14:00:00",
+        "rows": "6,062",
+        "start": "2017-05-10T05:00:00"
+      }
+    },
+    "train_fraction": 0.7,
+    "validation_fraction": 0.15
+  },
+  "traffic": {
+    "dataset": {
+      "attribution": "Hogue, J. (2019). Metro Interstate Traffic Volume [Dataset]. UCI Machine Learning Repository.",
+      "csv_gz": "data/external/metro_interstate/extracted/Metro_Interstate_Traffic_Volume.csv.gz",
+      "doi": "10.24432/C5X60B",
+      "download_url": "https://archive.ics.uci.edu/static/public/492/metro+interstate+traffic+volume.zip",
+      "geographic_coverage": "I-94 westbound ATR station 301, Minneapolis-St Paul, Minnesota, USA",
+      "license": "CC BY 4.0",
+      "missing_hours": 11976,
+      "name": "Metro Interstate Traffic Volume",
+      "raw_rows": 48204,
+      "sha256": "0b3679ac15173f79c6dc6c5ef8a0798d806fa5c5d7f05c84a5fa711bd1b05f07",
+      "source_url": "https://archive.ics.uci.edu/dataset/492/metro+interstate+traffic+volume",
+      "target": "traffic_volume",
+      "target_units": "vehicles per hour",
+      "time_span": [
+        "2012-10-02T09:00:00",
+        "2018-09-30T23:00:00"
+      ],
+      "usable_rows": 40575
+    },
+    "limitations": [
+      "Single Minnesota interstate sensor; not a Karachi route network.",
+      "Target is vehicle volume, not speed, travel time, or congestion.",
+      "No Karachi observations or route identifiers.",
+      "Class probabilities are model outputs, not calibrated intervals."
+    ],
+    "metrics_file": "evaluation.json",
+    "model": {
+      "classifier": "hist_gradient_boosting",
+      "feature_set": "calendar_only",
+      "features": [
+        "hour_sin",
+        "hour_cos",
+        "dow_sin",
+        "dow_cos",
+        "month_sin",
+        "month_cos",
+        "is_weekend"
+      ],
+      "regressor": "random_forest"
+    },
+    "target": {
+      "classes": [
+        "low",
+        "moderate",
+        "high"
+      ],
+      "name": "traffic_volume",
+      "threshold_basis": "train split terciles",
+      "thresholds": [
+        2213.0,
+        4570.0
+      ],
+      "units": "vehicles per hour"
+    }
+  },
+  "trained": true
+}

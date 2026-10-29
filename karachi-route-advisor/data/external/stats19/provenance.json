@@ -1,0 +1,78 @@
+{
+  "coverage": "Great Britain (England, Scotland, Wales)",
+  "dataset": {
+    "attribution": "Department for Transport (UK), Road safety data: collision tables.",
+    "files": [
+      {
+        "bytes": 19790001,
+        "name": "collision-2023.csv",
+        "sha256": "0c01d4194b4e4c5e1b242a43c633bc30e22cf16e8becca698e63a37f71410cfa"
+      },
+      {
+        "bytes": 19208488,
+        "name": "collision-2024.csv",
+        "sha256": "32a78f4662e309160f37b1ea2b82017e85e07b62a022d680da7140e88706a17c"
+      },
+      {
+        "bytes": 19349153,
+        "name": "collision-2025.csv",
+        "sha256": "e699c19bdb82e47e449b6f3381ac87631865f6a31cef118c9955ba80ca870e2b"
+      }
+    ],
+    "geographic_coverage": "Great Britain (England, Scotland, Wales)",
+    "hourly_cells": 26304,
+    "license": "Open Government Licence v3.0",
+    "name": "STATS19 Road Safety Data (collision tables)",
+    "raw_rows": 306710,
+    "severity_counts": {
+      "1": 4477,
+      "2": 72196,
+      "3": 230037
+    },
+    "severity_weights": {
+      "1": 10.0,
+      "2": 3.0,
+      "3": 1.0
+    },
+    "source_url": "https://www.gov.uk/government/statistics/road-safety-data",
+    "time_span": [
+      "2023-01-01T00:00:00",
+      "2025-12-31T23:00:00"
+    ]
+  },
+  "features_used": [
+    "hour_sin",
+    "hour_cos",
+    "dow_sin",
+    "dow_cos",
+    "month_sin",
+    "month_cos",
+    "is_weekend"
+  ],
+  "hourly_cells": 26304,
+  "license": "Open Government Licence v3.0",
+  "limitations": [
+    "Great Britain collision data; not Karachi crash records.",
+    "Calendar-only prior; not corridor-matched to Karachi routes.",
+    "Not a probability that a crash will occur on a selected route.",
+    "Severity weights are a documented policy choice."
+  ],
+  "raw_rows": 306710,
+  "retrieved_at_utc": "2026-10-27T18:49:20.400177+00:00",
+  "source": "UK Department for Transport road safety open data",
+  "target": {
+    "classes": [
+      "low",
+      "moderate",
+      "high"
+    ],
+    "name": "severity_weighted_collisions_per_hour",
+    "threshold_basis": "train split terciles",
+    "thresholds": [
+      10.0,
+      23.0
+    ],
+    "units": "severity-weighted collisions per hour"
+  },
+  "time_span": "2023-01-01T00:00:00 to 2025-12-31T23:00:00"
+}

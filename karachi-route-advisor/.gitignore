@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+*.pyc
+.env
+.pytest_cache/
+data/cache/*.graphml
+data/cache/*.json
+data/cache/*.osm
+data/cache/*.log
+data/local/
+data/simulated/

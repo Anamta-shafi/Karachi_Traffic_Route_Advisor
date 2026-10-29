@@ -1,0 +1,81 @@
+{
+  "features": [
+    {
+      "description": "Observed traffic volume 1 hour(s) before the target hour.",
+      "name": "lag_1"
+    },
+    {
+      "description": "Observed traffic volume 2 hour(s) before the target hour.",
+      "name": "lag_2"
+    },
+    {
+      "description": "Observed traffic volume 3 hour(s) before the target hour.",
+      "name": "lag_3"
+    },
+    {
+      "description": "Observed traffic volume 6 hour(s) before the target hour.",
+      "name": "lag_6"
+    },
+    {
+      "description": "Observed traffic volume 12 hour(s) before the target hour.",
+      "name": "lag_12"
+    },
+    {
+      "description": "Observed traffic volume 24 hour(s) before the target hour.",
+      "name": "lag_24"
+    },
+    {
+      "description": "Observed traffic volume 48 hour(s) before the target hour.",
+      "name": "lag_48"
+    },
+    {
+      "description": "Observed traffic volume 168 hour(s) before the target hour.",
+      "name": "lag_168"
+    },
+    {
+      "description": "Sine encoding of local hour of day.",
+      "name": "hour_sin"
+    },
+    {
+      "description": "Cosine encoding of local hour of day.",
+      "name": "hour_cos"
+    },
+    {
+      "description": "Sine encoding of day of week.",
+      "name": "dow_sin"
+    },
+    {
+      "description": "Cosine encoding of day of week.",
+      "name": "dow_cos"
+    },
+    {
+      "description": "Sine encoding of month.",
+      "name": "month_sin"
+    },
+    {
+      "description": "Cosine encoding of month.",
+      "name": "month_cos"
+    },
+    {
+      "description": "1 when the target date is Saturday or Sunday.",
+      "name": "is_weekend"
+    },
+    {
+      "description": "1 when the target date is a listed US/Minnesota holiday.",
+      "name": "is_holiday"
+    }
+  ],
+  "leakage_controls": [
+    "All lag features use only observations strictly before the target hour.",
+    "Chronological 70/15/15 split; no random shuffling.",
+    "The held-out test split is not used for model selection.",
+    "Weather at the target hour is excluded because it would not be known at forecast time.",
+    "Mapbox ETA differences are not used as labels or features."
+  ],
+  "prediction_horizon": "1 hour",
+  "target": {
+    "definition": "Hourly westbound I-94 volume at ATR station 301.",
+    "name": "traffic_volume",
+    "units": "vehicles per hour"
+  }
+}

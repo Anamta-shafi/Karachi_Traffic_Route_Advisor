@@ -1,0 +1,12 @@
+osmnx>=2.0
+networkx>=3.2
+pandas>=2.0
+streamlit>=1.66
+streamlit-folium>=0.20
+folium>=0.16
+requests>=2.31
+python-dotenv>=1.0
+pytest>=8.0
+scikit-learn>=1.5
+scipy>=1.11
+joblib>=1.3

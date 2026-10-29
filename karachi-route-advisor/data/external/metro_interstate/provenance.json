@@ -1,0 +1,47 @@
+{
+  "dataset": {
+    "attribution": "Hogue, J. (2019). Metro Interstate Traffic Volume [Dataset]. UCI Machine Learning Repository.",
+    "csv_gz_file": "data/external/metro_interstate/extracted/Metro_Interstate_Traffic_Volume.csv.gz",
+    "csv_gz_sha256": "0b3679ac15173f79c6dc6c5ef8a0798d806fa5c5d7f05c84a5fa711bd1b05f07",
+    "csv_gz_size_bytes": 405373,
+    "doi": "10.24432/C5X60B",
+    "download_url": "https://archive.ics.uci.edu/static/public/492/metro+interstate+traffic+volume.zip",
+    "duplicate_timestamp_rows_removed": 7629,
+    "geographic_coverage": "I-94 westbound ATR station 301, Minneapolis-St Paul, Minnesota, USA",
+    "license": "CC BY 4.0",
+    "limitations": [
+      "Single external interstate sensor, not a Karachi route network.",
+      "Target is vehicle volume, not speed, travel time, or congestion.",
+      "No Karachi road identifiers or route geometry.",
+      "No independent Karachi validation.",
+      "Absolute timestamps are local CST, 2012-2018.",
+      "Missing hours are not interpolated.",
+      "Duplicate timestamp rows were collapsed only when volume was identical."
+    ],
+    "missing_hours": 11976,
+    "name": "Metro Interstate Traffic Volume",
+    "raw_rows": 48204,
+    "retrieved_at_utc": "2026-10-26T19:36:49.585453+00:00",
+    "source_url": "https://archive.ics.uci.edu/dataset/492/metro+interstate+traffic+volume",
+    "target": "traffic_volume",
+    "target_units": "vehicles per hour",
+    "time_span_raw": [
+      "2012-10-02T09:00:00",
+      "2018-09-30T23:00:00"
+    ],
+    "time_span_usable": [
+      "2012-10-09T10:00:00",
+      "2018-09-30T23:00:00"
+    ],
+    "uci_id": 492,
+    "unique_timestamp_rows": 40575,
+    "usable_rows": 31738,
+    "zip_file": "data/external/metro_interstate/metro_interstate_traffic_volume.zip",
+    "zip_sha256": "b99aeabcbd6cc86f642da3a79d90883425798f58abd3b3302da2fa19dda73768",
+    "zip_size_bytes": 405547
+  },
+  "evaluation": "models/traffic_flow/evaluation.json",
+  "model_artifact": "models/traffic_flow/traffic_volume_model.joblib",
+  "route_applicable": false,
+  "selected_model": "random_forest"
+}
