@@ -1,14 +1,13 @@
 from __future__ import annotations
 
-from datetime import date, datetime, time, timedelta
+from datetime import date, datetime, time, timedelta, timezone
 from html import escape as html_escape
 
 import folium
-import pandas as pd
 import streamlit as st
 from streamlit_folium import st_folium
 
-from src.config import LANDMARKS, mapbox_token_present
+from src.config import LANDMARKS
 from src.contracts import (
     FinalRecommendation,
     FinalRouteDecision,
@@ -17,7 +16,6 @@ from src.contracts import (
     RouteTrafficPrediction,
     WeatherSnapshot,
 )
-from src.local_traffic import local_traffic_summary
 from src.service import RouteService
 from src.weather import fetch_weather
 
@@ -29,6 +27,19 @@ PREDICTION_BANDS = {"low": "LOW", "moderate": "MODERATE", "high": "HIGH"}
 USABLE_PREDICTION_STATUSES = frozenset({"ok", "partial"})
 SELECTED_ROUTE_KEY = "selected_route_id"
 SELECTION_CONTEXT_KEY = "selected_route_context"
+MAX_ALTERNATIVES = 2
+STALE_EVIDENCE_MINUTES = 60
+
+BADGE_STYLES = {
+    "RECOMMENDED": "#0b6e4f",
+    "LIVE": "#1f6feb",
+    "FORECAST": "#6c4bb6",
+    "SYNTHETIC": "#b7791f",
+    "ESTIMATED": "#4a5568",
+    "HISTORICAL": "#2b6cb0",
+}
+BAND_RANK = {"LOW": 0, "MODERATE": 1, "HIGH": 2}
+INCIDENT_RANK = {"Low": 0, "Moderate": 1, "High": 2}
 
 
 @st.cache_resource(show_spinner=False)
@@ -41,6 +52,28 @@ def get_weather(lat: float, lon: float) -> WeatherSnapshot:
     return fetch_weather(lat, lon)
 
 
+def _apply_readable_styles() -> None:
+    st.markdown(
+        """
+        <style>
+        html, body, [data-testid="stAppViewContainer"] { font-size: 18px; }
+        [data-testid="stMarkdownContainer"] p,
+        [data-testid="stMarkdownContainer"] li {
+            font-size: 1.05rem;
+            line-height: 1.55;
+        }
+        [data-testid="stMetricValue"] { font-size: 1.75rem; }
+        [data-testid="stMetricLabel"] { font-size: 1rem; }
+        [data-testid="stSidebar"] { font-size: 1rem; }
+        h1 { font-size: 2.2rem; }
+        h2 { font-size: 1.6rem; }
+        h3 { font-size: 1.3rem; }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 def _route_label(decision: FinalRouteDecision) -> str:
     if decision.recommended:
         return "Recommended route"
@@ -49,11 +82,6 @@ def _route_label(decision: FinalRouteDecision) -> str:
 
 def _assessment(decision: FinalRouteDecision) -> RouteAssessment | None:
     return decision.assessment
-
-
-def _eta_text(assessment: RouteAssessment | None, fallback: float) -> str:
-    value = assessment.decision_eta_min if assessment is not None else fallback
-    return f"{value:.0f} min"
 
 
 def _prediction(decision: FinalRouteDecision) -> RouteTrafficPrediction | None:
@@ -68,27 +96,13 @@ def _prediction(decision: FinalRouteDecision) -> RouteTrafficPrediction | None:
     return None
 
 
-def _usable_prediction(
-    prediction: RouteTrafficPrediction | None,
-) -> bool:
+def _usable_prediction(prediction: RouteTrafficPrediction | None) -> bool:
     return (
         prediction is not None
         and prediction.status in USABLE_PREDICTION_STATUSES
         and prediction.traffic_band in PREDICTION_BANDS
         and bool(prediction.traffic_probabilities)
     )
-
-
-def _prediction_departure(
-    decision: FinalRouteDecision,
-) -> datetime | None:
-    prediction = _prediction(decision)
-    if prediction is not None:
-        return prediction.requested_departure
-    assessment = _assessment(decision)
-    if assessment is not None:
-        return assessment.requested_departure
-    return None
 
 
 def _prediction_band_text(decision: FinalRouteDecision) -> str:
@@ -99,45 +113,12 @@ def _prediction_band_text(decision: FinalRouteDecision) -> str:
     return "Unavailable"
 
 
-def _prediction_probability_text(decision: FinalRouteDecision) -> str:
-    prediction = _prediction(decision)
-    if _usable_prediction(prediction):
-        assert prediction is not None
-        if prediction.traffic_probability is not None:
-            return f"{prediction.traffic_probability:.0%}"
-    return "Unavailable"
-
-
-def _prediction_confidence_text(decision: FinalRouteDecision) -> str:
-    prediction = _prediction(decision)
-    if _usable_prediction(prediction):
-        assert prediction is not None
-        return prediction.confidence
-    return "Unavailable"
-
-
-def _traffic_adjusted_eta_text(decision: FinalRouteDecision) -> str:
-    assessment = _assessment(decision)
-    if assessment is None:
-        return "Unavailable"
-    evidence = assessment.traffic_evidence
-    if (
-        evidence is not None
-        and evidence.applied
-        and assessment.traffic_adjusted_eta_min is not None
-    ):
-        return f"{assessment.traffic_adjusted_eta_min:.0f} min"
-    return "Not applied"
-
-
-def _incident_source_text(decision: FinalRouteDecision) -> str:
+def _incident_text(decision: FinalRouteDecision) -> str:
     risk = decision.incident_risk
-    return risk.source or "Unavailable"
+    return risk.level.title() if risk.route_specific else "Unavailable"
 
 
-def _recommended_decision(
-    final: FinalRecommendation,
-) -> FinalRouteDecision:
+def _recommended_decision(final: FinalRecommendation) -> FinalRouteDecision:
     for decision in final.routes:
         if decision.recommended:
             return decision
@@ -171,56 +152,239 @@ def _select_route(route_id: str) -> None:
         st.rerun()
 
 
-def _provider_evidence_text(decision: FinalRouteDecision) -> str:
-    assessment = _assessment(decision)
-    if assessment is None:
-        return "Unavailable"
-    evidence = assessment.traffic_evidence
-    if evidence is not None and evidence.applied:
-        return "Matched provider evidence"
-    if evidence is not None:
-        return "No defensible match"
-    return "Not available"
-
-
-def _provider_evidence_help(decision: FinalRouteDecision) -> str:
-    assessment = _assessment(decision)
-    if assessment is None:
-        return "No provider traffic evidence was matched to this OSM route."
-    evidence = assessment.traffic_evidence
-    if evidence is not None and evidence.applied:
-        return (
-            f"Matched Mapbox route {evidence.provider_route_id} for the requested "
-            "departure. This is provider evidence, separate from the future-ML "
-            "prediction below."
-        )
-    return (
-        "Matched Mapbox provider evidence is used only when the corridor overlap "
-        "and baseline are defensible. It is separate from the future-ML prediction."
-    )
-
-
-def _incident_text(decision: FinalRouteDecision) -> str:
-    risk = decision.incident_risk
-    if risk.route_specific:
-        return risk.level.title()
-    return "Unavailable"
-
-
-def _traffic_status_text(response: RouteResponse) -> str:
-    mapping = {
-        "annotated": "Matched provider annotations available",
-        "partial_eta_delta_only": "Provider ETA-versus-typical evidence only",
-        "no_traffic_evidence": "No non-unknown provider traffic evidence",
-        "no_mapbox": "Mapbox evidence not used",
-    }
-    return mapping.get(response.traffic_status, response.traffic_status)
-
-
 def _route_line_style(selected: bool) -> tuple[str, int, float, str | None]:
     if selected:
         return SELECTED_ROUTE_COLOR, 10, 1.0, None
     return UNSELECTED_ROUTE_COLOR, 4, 0.55, "6 6"
+
+
+def _parse_timestamp(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    text = value.strip()
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is not None:
+        parsed = parsed.astimezone(timezone.utc).replace(tzinfo=None)
+    return parsed
+
+
+def _evidence_is_stale(fetched_at: str | None) -> bool:
+    parsed = _parse_timestamp(fetched_at)
+    if parsed is None:
+        return False
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    return (now - parsed) > timedelta(minutes=STALE_EVIDENCE_MINUTES)
+
+
+def _badge_html(kind: str, text: str) -> str:
+    color = BADGE_STYLES.get(kind, "#4a5568")
+    return (
+        f'<span style="display:inline-block;margin:0 8px 6px 0;padding:4px 12px;'
+        f"border-radius:999px;background:{color};color:#ffffff;font-size:0.85rem;"
+        f'font-weight:600;">{html_escape(kind)} &middot; {html_escape(text)}</span>'
+    )
+
+
+def _decision_badges(decision: FinalRouteDecision) -> list[tuple[str, str]]:
+    badges: list[tuple[str, str]] = []
+    if decision.recommended:
+        badges.append(("RECOMMENDED", "rank 1"))
+    assessment = _assessment(decision)
+    evidence = assessment.traffic_evidence if assessment is not None else None
+    prediction = _prediction(decision)
+    if evidence is not None and evidence.applied:
+        badges.append(("LIVE", "Mapbox matched snapshot"))
+        if _evidence_is_stale(evidence.fetched_at):
+            badges.append(("HISTORICAL", "stale snapshot"))
+    elif _usable_prediction(prediction):
+        assert prediction is not None
+        if prediction.data_provenance == "SYNTHETIC":
+            badges.append(("SYNTHETIC", "ML scenario"))
+        else:
+            badges.append(("FORECAST", "ML scenario"))
+        badges.append(("ESTIMATED", "OSM base"))
+    else:
+        badges.append(("ESTIMATED", "OSM analytical ETA"))
+    return badges
+
+
+def _traffic_banner(
+    response: RouteResponse,
+    final: FinalRecommendation,
+) -> str | None:
+    applied = [
+        assessment.traffic_evidence
+        for decision in final.routes
+        if (assessment := _assessment(decision)) is not None
+        and assessment.traffic_evidence is not None
+        and assessment.traffic_evidence.applied
+    ]
+    usable_forecast = any(
+        _usable_prediction(_prediction(decision)) for decision in final.routes
+    )
+    if applied:
+        stale = [
+            evidence
+            for evidence in applied
+            if _evidence_is_stale(evidence.fetched_at)
+        ]
+        if stale:
+            return (
+                "The matched live traffic snapshot is stale "
+                f"(fetched {stale[0].fetched_at}). Treat it as historical "
+                "evidence and refresh the route before relying on it."
+            )
+        if response.traffic_status == "partial_eta_delta_only":
+            return (
+                "Live traffic is partial: only a provider ETA-versus-typical "
+                "delta is available. Segment-level congestion is unavailable."
+            )
+        return None
+    if response.traffic_status in {"no_mapbox", "no_traffic_evidence"}:
+        if usable_forecast:
+            return (
+                "Live traffic is unavailable. ETAs use the future-ML scenario "
+                "forecast (synthetic labels) and OSM estimates, not live traffic."
+            )
+        return (
+            "Live traffic and a usable forecast are unavailable. ETAs are "
+            "analytical OSM estimates only; no traffic certainty is implied."
+        )
+    if response.traffic_status == "partial_eta_delta_only":
+        return (
+            "Live traffic is partial (provider ETA delta only). Segment "
+            "congestion is unavailable; treat the ETA as provider-profile evidence."
+        )
+    return None
+
+
+def _route_metrics(decision: FinalRouteDecision) -> dict[str, float | str | None]:
+    assessment = _assessment(decision)
+    return {
+        "eta": (
+            assessment.decision_eta_min
+            if assessment is not None
+            else decision.decision_time_min
+        ),
+        "km": decision.route.distance_m / 1000.0,
+        "band": _prediction_band_text(decision),
+        "incident": _incident_text(decision),
+        "incident_rank": INCIDENT_RANK.get(_incident_text(decision)),
+        "score": float(decision.final_score),
+    }
+
+
+def _why_choose(
+    decision: FinalRouteDecision,
+    recommended: FinalRouteDecision,
+) -> str:
+    metrics = _route_metrics(decision)
+    rec = _route_metrics(recommended)
+    if decision.route_id == recommended.route_id:
+        return (
+            f"Ranks first with a decision score of {metrics['score']:.0f}/100: "
+            f"{metrics['eta']:.1f} min, {metrics['km']:.2f} km, "
+            f"forecast traffic {metrics['band']}."
+        )
+    advantages: list[str] = []
+    if metrics["eta"] < rec["eta"] - 0.5:
+        advantages.append(f"{rec['eta'] - metrics['eta']:.1f} min faster")
+    if metrics["km"] < rec["km"] - 0.05:
+        advantages.append(f"{rec['km'] - metrics['km']:.1f} km shorter")
+    alt_band = BAND_RANK.get(str(metrics["band"]))
+    rec_band = BAND_RANK.get(str(rec["band"]))
+    if alt_band is not None and rec_band is not None and alt_band < rec_band:
+        advantages.append(
+            f"lower forecast traffic ({metrics['band']} vs {rec['band']})"
+        )
+    if (
+        metrics["incident_rank"] is not None
+        and rec["incident_rank"] is not None
+        and metrics["incident_rank"] < rec["incident_rank"]
+    ):
+        advantages.append(
+            f"lower incident risk ({metrics['incident']} vs {rec['incident']})"
+        )
+    if advantages:
+        return "It is " + ", ".join(advantages) + "."
+    return (
+        "No ETA, distance, forecast-traffic, or incident-risk advantage over "
+        "the recommended route."
+    )
+
+
+def _why_not(
+    decision: FinalRouteDecision,
+    recommended: FinalRouteDecision,
+    alternatives: list[FinalRouteDecision],
+) -> str:
+    metrics = _route_metrics(decision)
+    if decision.route_id == recommended.route_id:
+        better: list[str] = []
+        for alternative in alternatives:
+            alt = _route_metrics(alternative)
+            if alt["eta"] < metrics["eta"] - 0.5:
+                better.append(
+                    f"{_route_label(alternative)} is "
+                    f"{metrics['eta'] - alt['eta']:.1f} min faster"
+                )
+            if alt["km"] < metrics["km"] - 0.05:
+                better.append(
+                    f"{_route_label(alternative)} is "
+                    f"{metrics['km'] - alt['km']:.1f} km shorter"
+                )
+            alt_band = BAND_RANK.get(str(alt["band"]))
+            rec_band = BAND_RANK.get(str(metrics["band"]))
+            if alt_band is not None and rec_band is not None and alt_band < rec_band:
+                better.append(
+                    f"{_route_label(alternative)} has lower forecast traffic"
+                )
+            if (
+                alt["incident_rank"] is not None
+                and metrics["incident_rank"] is not None
+                and alt["incident_rank"] < metrics["incident_rank"]
+            ):
+                better.append(
+                    f"{_route_label(alternative)} has lower incident risk"
+                )
+        if better:
+            return "Trade-off: " + "; ".join(better) + "."
+        return (
+            "No alternative beats it on ETA, distance, forecast traffic, or "
+            "incident risk."
+        )
+    rec = _route_metrics(recommended)
+    disadvantages: list[str] = []
+    if metrics["eta"] > rec["eta"] + 0.5:
+        disadvantages.append(f"{metrics['eta'] - rec['eta']:.1f} min slower")
+    if metrics["km"] > rec["km"] + 0.05:
+        disadvantages.append(f"{metrics['km'] - rec['km']:.1f} km longer")
+    alt_band = BAND_RANK.get(str(metrics["band"]))
+    rec_band = BAND_RANK.get(str(rec["band"]))
+    if alt_band is not None and rec_band is not None and alt_band > rec_band:
+        disadvantages.append(
+            f"higher forecast traffic ({metrics['band']} vs {rec['band']})"
+        )
+    if (
+        metrics["incident_rank"] is not None
+        and rec["incident_rank"] is not None
+        and metrics["incident_rank"] > rec["incident_rank"]
+    ):
+        disadvantages.append(
+            f"higher incident risk ({metrics['incident']} vs {rec['incident']})"
+        )
+    if metrics["score"] < rec["score"]:
+        disadvantages.append(
+            f"lower decision score ({metrics['score']:.0f} vs {rec['score']:.0f})"
+        )
+    if disadvantages:
+        return "It is " + ", ".join(disadvantages) + "."
+    return "It ranks lower on the overall decision score despite similar metrics."
 
 
 def build_map(
@@ -251,6 +415,7 @@ def build_map(
         icon=folium.Icon(color="red", icon="stop"),
     ).add_to(map_object)
     selected = _selected_decision(final, selected_route_id)
+    recommended = _recommended_decision(final)
     ordered = [
         decision
         for decision in final.routes
@@ -279,6 +444,17 @@ def build_map(
                 f"{route.distance_m / 1000.0:.2f} km"
             ),
         ).add_to(map_object)
+    if recommended.route.geometry:
+        midpoint = recommended.route.geometry[len(recommended.route.geometry) // 2]
+        folium.CircleMarker(
+            location=midpoint,
+            radius=8,
+            color=SELECTED_ROUTE_COLOR,
+            fill=True,
+            fill_color=SELECTED_ROUTE_COLOR,
+            fill_opacity=0.9,
+            tooltip="Recommended route",
+        ).add_to(map_object)
     points = [origin, destination]
     for decision in final.routes:
         points.extend(decision.route.geometry)
@@ -295,12 +471,14 @@ def build_map(
     legend_html = (
         '<div style="position: fixed; bottom: 24px; left: 24px; z-index: 9999; '
         "background: rgba(255, 255, 255, 0.95); border: 1px solid #ccc; "
-        "border-radius: 6px; padding: 8px 12px; font-size: 12px; "
+        "border-radius: 6px; padding: 8px 12px; font-size: 13px; "
         'line-height: 1.5;">'
         f"<b>Selected OSM route:</b> {html_escape(selected.route_id)} "
         "(bold green)<br>"
         "<span style=\"color: #7f8c8d;\">Other OSM routes</span> "
-        "(thin dashed grey)"
+        "(thin dashed grey)<br>"
+        f"<span style=\"color: {SELECTED_ROUTE_COLOR};\">&#9679;</span> "
+        f"Recommended route marker: {html_escape(recommended.route_id)}"
         "</div>"
     )
     map_object.get_root().html.add_child(folium.Element(legend_html))
@@ -316,7 +494,7 @@ def render_map(
     selected = _selected_decision(final, selected_route_id)
     st_folium(
         build_map(response, final, selected.route_id),
-        height=500,
+        height=640,
         use_container_width=True,
         returned_objects=[],
         key=(
@@ -327,572 +505,154 @@ def render_map(
     )
 
 
-def render_prediction(decision: FinalRouteDecision) -> None:
-    prediction = _prediction(decision)
-    usable = _usable_prediction(prediction)
-    band = (
-        PREDICTION_BANDS[prediction.traffic_band]
-        if usable and prediction is not None
-        else "Unavailable"
-    )
-    st.markdown("#### Future-traffic ML prediction")
-    st.markdown(f"**Predicted traffic at departure:** {band}")
-    if not usable:
-        reason = (
-            prediction.confidence_note
-            if prediction is not None
-            else "No route-specific ML prediction was returned for this route."
-        )
-        departure = _prediction_departure(decision)
-        departure_text = (
-            f" for {departure:%Y-%m-%d %H:%M}" if departure is not None else ""
-        )
-        st.caption(
-            f"No ML congestion band is shown for {decision.route_id}"
-            f"{departure_text}. {reason}"
-        )
-        if prediction is not None:
-            st.caption(
-                f"Prediction provenance: {prediction.data_provenance_label}. "
-                f"Model: {prediction.model_name} ({prediction.model_version})."
-            )
-        else:
-            st.caption(
-                "Prediction provenance: unavailable; no prediction was generated."
-            )
-        return
-
-    assert prediction is not None
-    probability = (
-        f"{prediction.traffic_probability:.0%}"
-        if prediction.traffic_probability is not None
-        else "Unavailable"
-    )
-    columns = st.columns(3)
-    columns[0].metric("Predicted congestion probability", probability)
-    columns[1].metric("Confidence", prediction.confidence)
-    columns[2].metric(
-        "Selected departure",
-        f"{prediction.requested_departure:%Y-%m-%d %H:%M}",
-    )
-    st.caption(
-        f"Prediction provenance: {prediction.data_provenance_label}. "
-        f"Model: {prediction.model_name} ({prediction.model_version})."
-    )
-    if prediction.traffic_probabilities:
-        st.caption(
-            "Class probabilities: "
-            + ", ".join(
-                f"{PREDICTION_BANDS.get(band_name, band_name.upper())}="
-                f"{probability_value:.0%}"
-                for band_name, probability_value in prediction.traffic_probabilities
-            )
-        )
-    st.caption(prediction.confidence_note)
-
-
 def render_route_card(
     decision: FinalRouteDecision,
     final: FinalRecommendation,
     selected_route_id: str,
+    recommended: FinalRouteDecision,
+    alternatives: list[FinalRouteDecision],
 ) -> None:
     assessment = _assessment(decision)
-    prediction = _prediction(decision)
     selected = decision.route_id == selected_route_id
     with st.container(border=True):
-        title_columns = st.columns([3.2, 1.0])
+        title_columns = st.columns([3.0, 1.0])
         title_columns[0].markdown(f"### {_route_label(decision)}")
-        title_columns[1].caption(
-            "Currently selected" if selected else "Available route"
+        if selected:
+            title_columns[1].markdown("**Selected**")
+        st.markdown(
+            "".join(
+                _badge_html(kind, text)
+                for kind, text in _decision_badges(decision)
+            ),
+            unsafe_allow_html=True,
         )
-        st.caption(
-            f"OSM route {decision.route_id} | "
-            f"{decision.route.distance_m / 1000.0:.2f} km | "
-            f"{final.departure:%Y-%m-%d %H:%M}"
-        )
-        columns = st.columns(4)
-        columns[0].metric(
-            "ETA",
-            _eta_text(assessment, decision.decision_time_min),
-            help=(
-                assessment.decision_eta_basis
+        metric_columns = st.columns(3)
+        metric_columns[0].metric(
+            "Selected ETA" if selected else "ETA",
+            (
+                f"{assessment.decision_eta_min:.0f} min"
                 if assessment is not None
-                else decision.decision_time_basis
+                else f"{decision.decision_time_min:.0f} min"
             ),
         )
-        columns[1].metric(
+        metric_columns[1].metric(
             "Distance",
             f"{decision.route.distance_m / 1000.0:.1f} km",
         )
-        columns[2].metric(
-            "Predicted traffic",
+        metric_columns[2].metric(
+            "Traffic",
             _prediction_band_text(decision),
-            help=(
-                prediction.confidence_note
-                if prediction is not None
-                else "No route-specific ML prediction is available."
-            ),
         )
-        columns[3].metric(
-            "Congestion probability",
-            _prediction_probability_text(decision),
-        )
-        detail_columns = st.columns(4)
-        detail_columns[0].metric(
-            "Confidence",
-            _prediction_confidence_text(decision),
-        )
-        detail_columns[1].metric(
-            "Provider traffic evidence",
-            _provider_evidence_text(decision),
-            help=_provider_evidence_help(decision),
-        )
-        detail_columns[2].metric(
-            "Traffic-adjusted ETA",
-            _traffic_adjusted_eta_text(decision),
-        )
-        detail_columns[3].metric(
-            "Incident risk",
-            _incident_text(decision),
-        )
-        provenance = (
-            prediction.data_provenance_label
-            if prediction is not None
-            else "Unavailable"
-        )
-        st.caption(
-            f"Incident source: {_incident_source_text(decision)} | "
-            f"Prediction provenance: {provenance}"
-        )
-        st.caption(decision.ranking_reason)
-        if decision.recommended:
-            if final.advice_code in {"not_recommended", "consider_earlier"}:
-                st.warning(f"**{final.advice_label}**")
-            elif final.advice_code == "good_time":
-                st.success(f"**{final.advice_label}**")
-            else:
-                st.info(f"**{final.advice_label}**")
-            st.write(final.advice_message)
-        button_label = (
-            f"Selected: {_route_label(decision)}"
-            if selected
-            else f"Select {_route_label(decision)}"
-        )
-        if st.button(
-            button_label,
-            key=f"select-route-{decision.route_id}",
-            type="primary" if selected else "secondary",
-            use_container_width=True,
-        ):
-            _select_route(decision.route_id)
-
-
-def render_route_options(
-    final: FinalRecommendation,
-    selected_route_id: str,
-) -> None:
-    recommended = _recommended_decision(final)
-    alternatives = [
-        decision
-        for decision in final.routes
-        if decision.route_id != recommended.route_id
-    ]
-    st.subheader("Recommended route")
-    render_route_card(recommended, final, selected_route_id)
-    st.subheader("Other best routes")
-    if not alternatives:
-        st.caption(
-            "No distinct valid alternative was found. Routes are not invented to "
-            "fill this list."
-        )
-        return
-    for decision in alternatives:
-        render_route_card(decision, final, selected_route_id)
-
-
-def render_selected_route(
-    decision: FinalRouteDecision,
-    final: FinalRecommendation,
-) -> None:
-    assessment = _assessment(decision)
-    prediction = _prediction(decision)
-    st.subheader("Selected route details")
-    with st.container(border=True):
-        st.markdown(f"### {_route_label(decision)}")
-        st.markdown(f"**Active route:** OSM route {decision.route_id}")
-        st.caption(
-            f"{decision.route.distance_m / 1000.0:.2f} km | "
-            f"Selected departure {final.departure:%Y-%m-%d %H:%M}"
-        )
-        columns = st.columns(4)
-        columns[0].metric(
-            "Selected ETA",
-            _eta_text(assessment, decision.decision_time_min),
-            help=(
-                assessment.decision_eta_basis
-                if assessment is not None
-                else decision.decision_time_basis
-            ),
-        )
-        columns[1].metric(
-            "Distance",
-            f"{decision.route.distance_m / 1000.0:.1f} km",
-        )
-        columns[2].metric(
-            "Provider traffic evidence",
-            _provider_evidence_text(decision),
-            help=_provider_evidence_help(decision),
-        )
-        columns[3].metric("Incident risk", _incident_text(decision))
-        if assessment is not None:
-            st.caption(f"{assessment.eta_label}. {assessment.confidence_note}")
-
-        render_prediction(decision)
-
-        st.markdown("#### ETA breakdown")
-        eta_columns = st.columns(4)
-        eta_columns[0].metric(
-            "Analytical ETA",
-            (
-                f"{assessment.analytical_eta_min:.0f} min"
-                if assessment is not None
-                else f"{decision.route.eta_min:.0f} min"
-            ),
-        )
-        eta_columns[1].metric(
-            "ML scenario ETA",
-            (
-                f"{assessment.ml_eta_min:.1f} min"
-                if assessment is not None
-                and assessment.ml_eta_min is not None
-                else "Unavailable"
-            ),
-        )
-        eta_columns[2].metric(
-            "Traffic-adjusted ETA",
-            _traffic_adjusted_eta_text(decision),
-        )
-        eta_columns[3].metric(
-            "Decision ETA",
-            _eta_text(assessment, decision.decision_time_min),
-        )
-        eta_basis = (
-            assessment.decision_eta_basis
-            if assessment is not None
-            else decision.decision_time_basis
-        )
-        st.caption(f"Decision ETA basis: {eta_basis}")
-
-        st.markdown("#### Provider traffic evidence")
-        evidence = assessment.traffic_evidence if assessment is not None else None
-        if evidence is not None:
-            st.markdown(
-                "**Provider traffic evidence for this route:** "
-                f"{_provider_evidence_text(decision)}"
+        st.markdown("**Why choose this route**")
+        st.markdown(_why_choose(decision, recommended))
+        st.markdown("**Why not**")
+        st.markdown(_why_not(decision, recommended, alternatives))
+        if selected:
+            st.button(
+                f"Selected: {_route_label(decision)}",
+                key=f"select-route-{decision.route_id}",
+                disabled=True,
+                use_container_width=True,
             )
-            st.caption(
-                f"Source: Mapbox Directions API | "
-                f"Provider route: {evidence.provider_route_id} | "
-                f"Method: {evidence.method} | "
-                f"Geometry overlap: {evidence.geometry_overlap:.0%} | "
-                f"Requested departure: "
-                f"{evidence.requested_departure:%Y-%m-%d %H:%M}"
-            )
-            if evidence.applied:
-                st.write(
-                    "Traffic-adjusted ETA from matched provider evidence: "
-                    f"{evidence.adjusted_eta_min:.1f} min"
-                )
-            else:
-                st.caption(
-                    "Matched provider evidence was not applied, so no "
-                    "provider-adjusted ETA is shown."
-                )
-            for item in evidence.limitations:
-                st.caption(item)
         else:
-            st.markdown(
-                "**Provider traffic evidence for this route:** Not available"
-            )
-            st.caption(
-                "No Mapbox provider route met the geometric matching and baseline "
-                "requirements for this route, so no provider-adjusted ETA is shown."
-            )
-
-        st.markdown("#### Incident risk")
-        risk = decision.incident_risk
-        st.markdown(f"**Incident risk for this route:** {_incident_text(decision)}")
-        st.caption(
-            f"Source: {_incident_source_text(decision)} | "
-            f"Evidence type: {risk.evidence_type}"
-        )
-        st.write(risk.explanation)
-        if risk.external_prior_level is not None:
-            prior_probability = (
-                f"{risk.external_prior_probability:.0%}"
-                if risk.external_prior_probability is not None
-                else "probability unavailable"
-            )
-            st.caption(
-                f"External accident prior: {risk.external_prior_level} "
-                f"({prior_probability}); not route-specific Karachi crash history."
-            )
-        for item in risk.limitations:
-            st.caption(item)
-
-        st.markdown("#### Decision explanation")
-        st.write(decision.ranking_reason)
-        if prediction is not None and _usable_prediction(prediction):
-            st.caption(
-                f"Route-specific ML advice: {prediction.advice_label}. "
-                f"{prediction.advice_message}"
-            )
-        if assessment is not None:
-            st.caption(
-                "Expert verdict: "
-                f"penalty={assessment.expert_verdict.penalty:.2f}, "
-                f"bonus={assessment.expert_verdict.bonus:.2f}"
-            )
-
-
-def render_technical_details(
-    response: RouteResponse,
-    final: FinalRecommendation,
-    selected_route_id: str | None = None,
-) -> None:
-    with st.expander("Technical Details & Data Limitations", expanded=False):
-        st.markdown("**Route assessment summary**")
-        st.dataframe(
-            [
-                {
-                    "Rank": decision.rank,
-                    "Route": decision.route_id,
-                    "Selected": decision.route_id == selected_route_id,
-                    "Recommended": decision.recommended,
-                    "Decision ETA (min)": round(
-                        decision.assessment.decision_eta_min
-                        if decision.assessment is not None
-                        else decision.decision_time_min,
-                        2,
-                    ),
-                    "ETA basis": (
-                        decision.assessment.decision_eta_basis
-                        if decision.assessment is not None
-                        else decision.decision_time_basis
-                    ),
-                    "Provider evidence": _provider_evidence_text(decision),
-                    "Incident risk": decision.incident_risk.level,
-                    "Academic rank": decision.academic_rank,
-                    "Final cost": round(decision.final_cost, 3),
-                }
-                for decision in final.routes
-            ],
-            width="stretch",
-            hide_index=True,
-        )
-        for decision in final.routes:
-            assessment = _assessment(decision)
-            selected_suffix = (
-                " (selected)"
-                if decision.route_id == selected_route_id
-                else ""
-            )
-            with st.expander(
-                f"{_route_label(decision)} technical details{selected_suffix}",
-                expanded=False,
+            if st.button(
+                f"Select {_route_label(decision)}",
+                key=f"select-route-{decision.route_id}",
+                use_container_width=True,
             ):
-                if assessment is not None:
-                    for item in assessment.details:
-                        st.write(f"- {item}")
-                    st.markdown("**Limitations**")
-                    for item in assessment.limitations:
-                        st.write(f"- {item}")
-                st.write(decision.ranking_reason)
-                st.markdown("**Incident risk evidence**")
-                st.write(decision.incident_risk.explanation)
-                for item in decision.incident_risk.limitations:
-                    st.caption(item)
-                st.markdown("**Expert-system trace**")
-                trace_rows = [
-                    {
-                        "Rule": entry.rule_id,
-                        "Name": entry.rule_name,
-                        "Evidence": entry.evidence,
-                        "Effect": entry.effect,
-                    }
-                    for entry in decision.assessment.expert_verdict.trace
-                ] if decision.assessment is not None else []
-                if trace_rows:
-                    st.dataframe(trace_rows, width="stretch", hide_index=True)
-                else:
-                    st.caption("No expert-system trace is available.")
-                prediction = _prediction(decision)
-                if prediction is not None:
-                    st.markdown("**Future-traffic ML evidence**")
-                    st.write(
-                        f"Model: {prediction.model_name} "
-                        f"({prediction.model_version}) | "
-                        f"Data: {prediction.data_provenance_label}"
-                    )
-                    st.write(
-                        f"Band: {prediction.traffic_band.title()} | "
-                        f"Confidence: {prediction.confidence} | "
-                        f"Selected departure: "
-                        f"{prediction.requested_departure:%Y-%m-%d %H:%M} | "
-                        f"Real records: {prediction.real_records:,} | "
-                        f"Synthetic records: {prediction.synthetic_records:,}"
-                    )
-                    if prediction.traffic_probabilities:
-                        st.write(
-                            "Probabilities: "
-                            + ", ".join(
-                                f"{band}={probability:.0%}"
-                                for band, probability in prediction.traffic_probabilities
-                            )
-                        )
-                    if prediction.top_drivers:
-                        st.write("Top drivers: " + "; ".join(prediction.top_drivers))
-                    for item in prediction.limitations:
-                        st.caption(item)
-        st.markdown("**Matched traffic evidence**")
-        evidence_rows = []
-        for decision in final.routes:
-            assessment = _assessment(decision)
-            evidence = assessment.traffic_evidence if assessment is not None else None
-            if evidence is None:
-                continue
-            evidence_rows.append(
-                {
-                    "OSM route": evidence.route_id,
-                    "Provider route": evidence.provider_route_id,
-                    "Applied": evidence.applied,
-                    "Method": evidence.method,
-                    "Geometry overlap": f"{evidence.geometry_overlap:.0%}",
-                    "Segment coverage": (
-                        f"{evidence.segment_coverage:.0%}"
-                        if evidence.segment_coverage is not None
-                        else "unavailable"
-                    ),
-                    "Provider ETA (min)": round(evidence.provider_eta_min, 2),
-                    "Provider typical (min)": (
-                        round(evidence.provider_typical_min, 2)
-                        if evidence.provider_typical_min is not None
-                        else None
-                    ),
-                    "Delay ratio": (
-                        round(evidence.provider_delay_ratio, 3)
-                        if evidence.provider_delay_ratio is not None
-                        else None
-                    ),
-                    "Adjusted OSM ETA (min)": round(evidence.adjusted_eta_min, 2),
-                }
-            )
-        if evidence_rows:
-            st.dataframe(evidence_rows, width="stretch", hide_index=True)
-        else:
-            st.caption(
-                "No Mapbox provider route met the geometric matching and baseline "
-                "requirements for this request."
-            )
-        st.markdown("**Provider and data status**")
-        st.write(f"Mapbox traffic status: {_traffic_status_text(response)}")
-        st.write(f"Mapbox routes returned: {len(response.mapbox_routes)}")
-        st.write(
-            "Mapbox token configured: "
-            f"{'yes' if mapbox_token_present() else 'no'}"
+                _select_route(decision.route_id)
+
+
+def _swap_locations() -> None:
+    origin = st.session_state.get("origin_select")
+    destination = st.session_state.get("destination_select")
+    if origin is not None and destination is not None:
+        st.session_state["origin_select"] = destination
+        st.session_state["destination_select"] = origin
+
+
+def _ensure_trip_state() -> None:
+    landmarks = list(LANDMARKS)
+    if "origin_select" not in st.session_state:
+        st.session_state["origin_select"] = landmarks[0]
+    if "destination_select" not in st.session_state:
+        st.session_state["destination_select"] = landmarks[3]
+
+
+def render_sidebar() -> tuple[
+    str,
+    str,
+    datetime,
+    str,
+    bool,
+    bool,
+    bool,
+]:
+    with st.sidebar:
+        st.header("Plan your trip")
+        origin_name = st.selectbox(
+            "From",
+            list(LANDMARKS),
+            key="origin_select",
         )
-        st.write("Mapbox routes are evidence only; they are not route candidates.")
-        if response.baseline is not None:
-            baseline = response.baseline
-            st.markdown("**OSM A* vs Dijkstra baseline**")
-            baseline_columns = st.columns(4)
-            baseline_columns[0].metric(
-                "A* expanded nodes",
-                baseline.astar_expanded_nodes,
-            )
-            baseline_columns[1].metric(
-                "Dijkstra expanded nodes",
-                baseline.dijkstra_expanded_nodes,
-            )
-            baseline_columns[2].metric(
-                "Same path",
-                "yes" if baseline.same_path else "no",
-            )
-            baseline_columns[3].metric(
-                "Same cost",
-                "yes" if baseline.same_cost else "no",
-            )
-            st.caption(
-                "Dijkstra is an independent reference comparison, not a traffic "
-                "source and not a second recommendation."
-            )
-        else:
-            st.caption("Dijkstra baseline is unavailable for this request.")
-        st.markdown("**Local observations**")
-        local = local_traffic_summary()
-        st.write(local.message)
-        st.caption(
-            f"Local file: {local.path} | Rows: {local.rows} | "
-            f"Ready for training: {local.ready_for_training}"
+        destination_name = st.selectbox(
+            "To",
+            list(LANDMARKS),
+            key="destination_select",
         )
-        st.markdown("**Warnings and provenance**")
-        for warning in (*response.warnings, *final.warnings):
-            st.warning(warning)
-        for item in (*response.provenance, *final.provenance):
-            st.write(f"- {item}")
-        st.markdown("**How the recommendation is produced**")
-        st.write(final.policy_description)
-        st.write(
-            "Policy version: "
-            f"{final.policy_version} | Weights: "
-            + ", ".join(
-                f"{name}={weight:.2f}" for name, weight in final.weights
+        st.button(
+            "Swap origin and destination",
+            on_click=_swap_locations,
+            use_container_width=True,
+        )
+        with st.form("trip_form"):
+            departure_date = st.date_input(
+                "Departure date",
+                value=date.today() + timedelta(days=1),
             )
-        )
-        st.caption(
-            "OSM routing is A*/Dijkstra on the local OSM graph. Mapbox evidence "
-            "adjusts an OSM ETA only when the corridor match is defensible. The "
-            "future-traffic ML labels are synthetic scenarios. External UK STATS19 "
-            "accident priors are not Karachi crash history and are not route-specific."
-        )
+            departure_time = st.time_input(
+                "Departure time",
+                value=time(9, 0),
+            )
+            preference = st.selectbox(
+                "Preference",
+                ["Fastest", "Shortest", "Least congested", "Safest"],
+            )
+            avoid_tolls = st.checkbox("Strictly avoid tolls", value=False)
+            include_mapbox = st.checkbox(
+                "Use matched Mapbox traffic evidence",
+                value=True,
+            )
+            submitted = st.form_submit_button(
+                "Find Best Route",
+                type="primary",
+                use_container_width=True,
+            )
+    requested_departure = datetime.combine(departure_date, departure_time)
+    return (
+        origin_name,
+        destination_name,
+        requested_departure,
+        preference,
+        avoid_tolls,
+        include_mapbox,
+        submitted,
+    )
 
 
 def main() -> None:
+    _apply_readable_styles()
     st.title("Karachi Route Advisor")
-    st.caption(
-        "Gulistan-e-Jauhar pilot | OSM A*/Dijkstra routing | matched Mapbox "
-        "traffic evidence | future-traffic ML | expert-system assessment"
-    )
-    with st.form("trip_form"):
-        origin_column, destination_column = st.columns(2)
-        origin_name = origin_column.selectbox("From", list(LANDMARKS), index=0)
-        destination_name = destination_column.selectbox(
-            "To",
-            list(LANDMARKS),
-            index=3,
-        )
-        date_column, time_column, preference_column = st.columns(3)
-        departure_date = date_column.date_input(
-            "Departure date",
-            value=date.today() + timedelta(days=1),
-        )
-        departure_time = time_column.time_input("Departure time", value=time(9, 0))
-        preference = preference_column.selectbox(
-            "Preference",
-            ["Fastest", "Shortest", "Least congested", "Safest"],
-        )
-        toll_column, mapbox_column = st.columns(2)
-        avoid_tolls = toll_column.checkbox("Strictly avoid tolls", value=False)
-        include_mapbox = mapbox_column.checkbox(
-            "Use matched Mapbox traffic evidence",
-            value=True,
-        )
-        submitted = st.form_submit_button(
-            "Find Best Route",
-            type="primary",
-            use_container_width=True,
-        )
-    requested_departure = datetime.combine(departure_date, departure_time)
+    _ensure_trip_state()
+    (
+        origin_name,
+        destination_name,
+        requested_departure,
+        preference,
+        avoid_tolls,
+        include_mapbox,
+        submitted,
+    ) = render_sidebar()
     if submitted:
         if origin_name == destination_name:
             st.error("Origin and destination must be different.")
@@ -932,17 +692,7 @@ def main() -> None:
     response = st.session_state.get("response")
     if response is None:
         st.info("Choose a trip, set a departure, and click Find Best Route.")
-        st.write(
-            "The recommendation uses OSM A*/Dijkstra candidates only. Mapbox is "
-            "used as matched traffic evidence when available, not as a competing "
-            "route. Missing evidence is shown as unavailable rather than zero."
-        )
         return
-    if response.departure != requested_departure:
-        st.info(
-            "Showing the saved result for the previous departure. Click Find Best "
-            "Route to refresh for the current sidebar departure."
-        )
     final = response.final_recommendation
     if final is None or not final.routes:
         st.error(
@@ -962,12 +712,39 @@ def main() -> None:
     if not isinstance(selected_route_id, str) or selected_route_id not in route_ids:
         selected_route_id = recommended.route_id
         st.session_state[SELECTED_ROUTE_KEY] = selected_route_id
-    selected_decision = _selected_decision(final, selected_route_id)
-    render_route_options(final, selected_route_id)
-    render_selected_route(selected_decision, final)
+    selected = _selected_decision(final, selected_route_id)
+    alternatives = [
+        decision
+        for decision in final.routes
+        if decision.route_id != selected.route_id
+    ][:MAX_ALTERNATIVES]
+
+    st.markdown(f"### {response.origin} &rarr; {response.destination}", unsafe_allow_html=True)
+    st.caption(
+        f"{final.departure:%a %d %b %Y, %H:%M} | "
+        f"Preference: {response.preference} | "
+        f"Weather: {response.weather.condition}"
+    )
+    banner = _traffic_banner(response, final)
+    if banner is not None:
+        st.warning(banner)
+
     st.subheader("Map")
     render_map(response, final, selected_route_id)
-    render_technical_details(response, final, selected_route_id)
+
+    st.subheader("Selected route details")
+    render_route_card(selected, final, selected_route_id, recommended, alternatives)
+    st.subheader("Other best routes")
+    if not alternatives:
+        st.caption("No distinct alternative route is available.")
+    for decision in alternatives:
+        render_route_card(
+            decision,
+            final,
+            selected_route_id,
+            recommended,
+            alternatives,
+        )
 
 
 if __name__ == "__main__":
